@@ -8,6 +8,7 @@ using Logistics.Api.Hubs;
 using Logistics.Api.Services;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.Net.NetworkInformation;
 using static Logistics.Api.Utils.LogisticsUtils;
 
 namespace Logistics.Api.Services;
@@ -101,11 +102,84 @@ public class OrderService
         return o;
     }
 
-
     /// <summary>
     /// Lấy danh sách đơn hàng dành riêng cho Khách hàng (chỉ lấy đơn của chính customerId đó).
     /// </summary>
-    public async Task<object> GetCustomerOrdersAsync(int customerId, int page = 1, int itemPerpage = 10, string? search = null)
+    public async Task<object> GetCustomerOrdersAsync(
+        int customerId,
+        int page = 1,
+        int itemPerpage = 10,
+        string? search = null,
+        string? status = null)          
+    {
+        if (page < 1) page = 1;
+        if (itemPerpage < 1) itemPerpage = 10;
+
+        var query = _db.Orders
+            .AsNoTracking()                                
+            .Include(o => o.Driver)                     
+            .Where(o => o.CustomerId == customerId)
+            .AsQueryable();
+
+        // ============ FILTER: search (theo TrackingCode hoặc Id) ============
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim().ToLowerInvariant();
+            bool isNumeric = int.TryParse(keyword, out int searchId);
+
+            query = query.Where(o =>
+                o.TrackingCode.ToLower().Contains(keyword) ||
+                (isNumeric && o.Id == searchId));
+        }
+
+        // ============ FILTER: status ============
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<OrderStatus>(status.Trim(), ignoreCase: true, out var parsedStatus)
+                || !Enum.IsDefined(typeof(OrderStatus), parsedStatus))   
+            {
+                return new
+                {
+                    total_items = 0,
+                    total_pages = 0,
+                    current_page = page,
+                    item_per_page = itemPerpage,
+                    has_next = false,
+                    has_prev = false,
+                    data = Array.Empty<object>()
+                };
+            }
+
+            query = query.Where(o => o.Status == parsedStatus);
+        }
+
+        var totalItems = await query.CountAsync();
+        var totalPages = (int)Math.Ceiling(totalItems / (double)itemPerpage);
+
+        var orders = await query
+            .OrderByDescending(o => o.CreatedAtUtc)
+            .Skip((page - 1) * itemPerpage)
+            .Take(itemPerpage)
+            .ToListAsync();
+
+        var items = orders.Select(o => o.ToResponse()).ToList();
+
+        return new
+        {
+            total_items = totalItems,
+            total_pages = totalPages,
+            current_page = page,
+            item_per_page = itemPerpage,
+            has_next = page < totalPages,
+            has_prev = page > 1,
+            data = items
+        };
+    }
+
+    /// <summary>
+    /// Lấy toàn bộ danh sách đơn hàng trong hệ thống dành cho Admin (có hỗ trợ tìm kiếm và phân trang).
+    /// </summary>
+    public async Task<object> GetAllOrdersForAdminAsync(int page = 1, int itemPerpage = 10, string? search = null,string? status = null)
     {
         if (page < 1) page = 1;
         if (itemPerpage < 1) itemPerpage = 10;
@@ -113,7 +187,6 @@ public class OrderService
         var query = _db.Orders
             .Include(o => o.Customer)
             .Include(o => o.Driver)
-            .Where(o => o.CustomerId == customerId)
             .AsQueryable();
 
         if (!string.IsNullOrWhiteSpace(search))
@@ -123,8 +196,30 @@ public class OrderService
 
             query = query.Where(o =>
                 o.TrackingCode.ToLower().Contains(keyword) ||
+                (o.Customer != null && o.Customer.Name.ToLower().Contains(keyword)) ||
                 (isNumeric && o.Id == searchId)
             );
+        }
+
+        // ============ FILTER: status ============
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<OrderStatus>(status.Trim(), ignoreCase: true, out var parsedStatus)
+                || !Enum.IsDefined(typeof(OrderStatus), parsedStatus))   
+            {
+                return new
+                {
+                    total_items = 0,
+                    total_pages = 0,
+                    current_page = page,
+                    item_per_page = itemPerpage,
+                    has_next = false,
+                    has_prev = false,
+                    data = Array.Empty<object>()
+                };
+            }
+
+            query = query.Where(o => o.Status == parsedStatus);
         }
 
         var totalItems = await query.CountAsync();
@@ -155,55 +250,30 @@ public class OrderService
     }
 
     /// <summary>
-    /// Lấy toàn bộ danh sách đơn hàng trong hệ thống dành cho Admin (có hỗ trợ tìm kiếm và phân trang).
+    /// Lấy thông tin chi tiết một đơn hàng theo ID, hỗ trợ kiểm tra quyền riêng tư của Khách hàng.
     /// </summary>
-    public async Task<object> GetAllOrdersForAdminAsync(int page = 1, int itemPerpage = 10, string? search = null)
+    public async Task<DeliveryOrder> GetOrderByIdAsync(int orderId, int userId, string userRole)
     {
-        if (page < 1) page = 1;
-        if (itemPerpage < 1) itemPerpage = 10;
-
         var query = _db.Orders
             .Include(o => o.Customer)
             .Include(o => o.Driver)
             .AsQueryable();
 
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var keyword = search.Trim().ToLower();
-            bool isNumeric = int.TryParse(keyword, out int searchId);
+        var order = await query.FirstOrDefaultAsync(o => o.Id == orderId);
 
-            query = query.Where(o =>
-                o.TrackingCode.ToLower().Contains(keyword) ||
-                (o.Customer != null && o.Customer.Name.ToLower().Contains(keyword)) ||
-                (isNumeric && o.Id == searchId)
-            );
+        // 1. Kiểm tra xem đơn hàng có tồn tại hay không
+        if (order == null)
+        {
+            throw new AppException(new OrderError(404, "Không tìm thấy đơn hàng."));
         }
 
-        var totalItems = await query.CountAsync();
-        var totalPages = (int)Math.Ceiling(totalItems / (double)itemPerpage);
-
-        // Tính toán cờ phân trang
-        bool hasNext = page < totalPages;
-        bool hasPrev = page > 1;
-
-        var orders = await query
-            .OrderByDescending(o => o.CreatedAtUtc)
-            .Skip((page - 1) * itemPerpage)
-            .Take(itemPerpage)
-            .ToListAsync();
-
-        var items = orders.Select(o => o.ToResponse()).ToList();
-
-        return new
+        // 2. Phân quyền: Nếu user là Khách hàng (Customer), bắt buộc phải là chủ nhân của đơn hàng đó mới được xem
+        if (userRole.ToUpper() == UserRole.Customer && order.CustomerId != userId)
         {
-            total_items = totalItems,
-            total_pages = totalPages,
-            current_page = page,
-            item_per_page = itemPerpage,
-            has_next = hasNext,
-            has_prev = hasPrev,
-            data = items
-        };
+            throw new AppException(new OrderError(403, "Bạn không có quyền xem thông tin chi tiết của đơn hàng này."));
+        }
+
+        return order;
     }
 
     private static bool ValidGps(double lat, double lng) =>

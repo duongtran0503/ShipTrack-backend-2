@@ -59,7 +59,9 @@ dlldata.c
 
 # Benchmark Results
 BenchmarkDotNet.Artifacts/
-
+.db-shm
+.db-wal
+.db
 # .NET
 project.lock.json
 project.fragment.lock.json

@@ -1,178 +1,125 @@
-﻿//using Logistics.Api.Data;
-//using Logistics.Api.Domain.Entities;
-//using Logistics.Api.Hubs;
-//using Microsoft.AspNetCore.SignalR;
-//using Microsoft.EntityFrameworkCore;
+﻿using Logistics.Api.Data;
+using Logistics.Api.Domain.Constants;
+using Logistics.Api.Domain.DTOs.Mappings;
+using Logistics.Api.Domain.DTOs.Requests;
+using Logistics.Api.Domain.DTOs.Responses;
+using Logistics.Api.Domain.Entities;
+using Logistics.Api.Domain.Exceptions;
+using Logistics.Api.Hubs;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
-//namespace Logistics.Api.Services;
+namespace Logistics.Api.Services;
 
-///// <summary>
-///// Lớp dịch vụ xử lý logic nghiệp vụ liên quan đến Người dùng (User), 
-///// cập nhật thông tin cá nhân, vị trí GPS tài xế, quản lý ví mô phỏng và hộp thư hỗ trợ.
-///// </summary>
-//public class UserService
-//{
-//    private readonly AppDbContext _db;
-//    private readonly IHubContext<LogisticsHub> _hub;
-//    private readonly IHostEnvironment _env;
+/// <summary>
+/// Lớp dịch vụ xử lý logic nghiệp vụ liên quan đến Người dùng (User), 
+/// cập nhật thông tin cá nhân, vị trí GPS tài xế, quản lý ví mô phỏng và hộp thư hỗ trợ.
+/// </summary>
+public class UserService
+{
+    private readonly AppDbContext _db;
+    private readonly IHubContext<LogisticsHub> _hub;
+    private readonly PasswordHasher<User> _hasher;
+    private readonly IHostEnvironment _env;
 
-//    public UserService(AppDbContext db, IHubContext<LogisticsHub> hub, IHostEnvironment env)
-//    {
-//        _db = db;
-//        _hub = hub;
-//        _env = env;
-//    }
+    public UserService(AppDbContext db, IHubContext<LogisticsHub> hub, IHostEnvironment env, PasswordHasher<User> hasher)
+    {
+        _db = db;
+        _hub = hub;
+        _env = env;
+        _hasher = hasher;
+    }
 
-//    /// <summary>
-//    /// Lấy thông tin chi tiết người dùng theo ID.
-//    /// </summary>
-//    public async Task<User?> GetUserByIdAsync(int id)
-//    {
-//        return await _db.Users.FindAsync(id);
-//    }
+    /// <summary>
+    /// Lấy thông tin hồ sơ cá nhân của user đang đăng nhập (Xử lý hoàn toàn tại Service).
+    /// </summary>
+    public async Task<UserResponse> GetMyProfileAsync(int userId)
+    {
+        var user = await _db.Users.FindAsync(userId);
 
-//    /// <summary>
-//    /// Cập nhật thông tin cá nhân (Profile) của người dùng (tên, số điện thoại, biển số xe nếu là tài xế).
-//    /// </summary>
-//    public async Task<User?> UpdateProfileAsync(int userId, ProfileRequest req)
-//    {
-//        var u = await _db.Users.FindAsync(userId);
-//        if (u == null) return null;
+        if (user == null)
+        {
+            throw new AppException(new AuthError(404, "Không tìm thấy thông tin người dùng."));
+        }
 
-//        if (string.IsNullOrWhiteSpace(req.Name)) return null;
+        // Thực hiện mapping ngay tại Service hoặc trả về entity tùy cấu trúc dự án của bạn. 
+        // Ở đây ta dùng extension method .ToResponse() để trả về DTO chuẩn.
+        return user.ToResponse();
+    }
 
-//        u.Name = req.Name.Trim();
-//        u.Phone = req.Phone?.Trim() ?? "";
+    public async Task<User> UpdateAsync(int id, UpdateUserRequest req)
+    {
+        var user = await _db.Users.FindAsync(id)
+            ?? throw new AppException(new AuthError(404, "Người dùng không tồn tại."));
+        user.Name = req.Name.Trim();
+        user.Phone = req.Phone.Trim();
+        user.LicensePlate = req.LicensePlate?.Trim() ?? "";
+        user.Balance = req.Balance;
+        user.IsActive = req.IsActive;
+        user.BanReason = req.IsActive
+            ? ""                                        
+            : req.BanReason?.Trim() ?? "";
 
-//        // Nếu là tài xế thì cho phép cập nhật thêm biển số xe
-//        if (u.Role.StartsWith("driver"))
-//        {
-//            u.LicensePlate = req.LicensePlate?.Trim() ?? u.LicensePlate;
-//        }
+        await _db.SaveChangesAsync();
+        return user;
+    }
 
-//        await _db.SaveChangesAsync();
-//        return u;
-//    }
+    public async Task ChangePasswordAsync(int userId, ChangePasswordRequest req)
+    {
+        var user = await _db.Users.FindAsync(userId)
+            ?? throw new AppException(new AuthError(404, "Người dùng không tồn tại."));
 
-//    /// <summary>
-//    /// Cập nhật tọa độ GPS trực tiếp và trạng thái sẵn sàng nhận đơn (Online/Offline) của tài xế.
-//    /// </summary>
-//    public async Task<User?> UpdateDriverLocationAsync(int driverId, LocationRequest req)
-//    {
-//        var u = await _db.Users.FindAsync(driverId);
-//        if (u == null || !u.Role.StartsWith("driver")) return null;
+        if (_hasher.VerifyHashedPassword(user, user.PasswordHash, req.CurrentPassword) != PasswordVerificationResult.Failed)
+        {
+            throw new AppException(new AuthError(400, "Mật khẩu hiện tại không đúng."));
+        }
+        
 
-//        u.Latitude = req.Latitude;
-//        u.Longitude = req.Longitude;
-//        u.Online = req.Online;
+        user.PasswordHash = _hasher.HashPassword(user,req.NewPassword);
+        await _db.SaveChangesAsync();
+    }
 
-//        await _db.SaveChangesAsync();
-//        return u;
-//    }
 
-//    /// <summary>
-//    /// Lấy danh sách lịch sử giao dịch ví của người dùng (tối đa 200 giao dịch gần nhất).
-//    /// </summary>
-//    public async Task<List<WalletTransaction>> GetUserTransactionsAsync(int userId)
-//    {
-//        return await _db.WalletTransactions
-//            .Where(t => t.UserId == userId)
-//            .OrderByDescending(t => t.CreatedAtUtc)
-//            .Take(200)
-//            .ToListAsync();
-//    }
+    /// <summary>
+    /// Lấy thống kê nhanh cho Customer Dashboard.
+    /// </summary>
+    public async Task<CustomerDashboardStatsResponse> GetDashboardStatsAsync(int customerId)
+    {
+        // Base query: chỉ đơn của customer hiện tại
+        var baseQuery = _db.Orders.AsNoTracking()
+            .Where(o => o.CustomerId == customerId);
 
-//    /// <summary>
-//    /// Nạp tiền demo vào ví (Chỉ cho phép ở môi trường Development, tối đa 10 triệu đồng).
-//    /// </summary>
-//    public async Task<(bool Success, string? Error, User? User)> TopUpAsync(int userId, decimal amount)
-//    {
-//        if (!_env.IsDevelopment())
-//            return (false, "Nạp tiền demo chỉ có ở môi trường Development.", null);
+        // Đếm song song để giảm round-trip DB
+        var totalOrdersTask = baseQuery.CountAsync();
 
-//        if (amount <= 0 || amount > 10000000 || amount != decimal.Truncate(amount))
-//            return (false, "Số tiền nạp phải > 0 và <= 10 triệu.", null);
+        var completedOrdersTask = baseQuery
+            .CountAsync(o => o.Status == OrderStatus.COMPLETED);
 
-//        var u = await _db.Users.FindAsync(userId);
-//        if (u == null) return (false, "Không tìm thấy người dùng.", null);
+        // "Đang hoạt động" = mọi trạng thái TRỪ COMPLETED và CANCELLED
+        var activeOrdersTask = baseQuery
+            .CountAsync(o => o.Status != OrderStatus.COMPLETED
+                          && o.Status != OrderStatus.CANCELLED);
 
-//        // Cộng tiền vào ví và ghi nhận lịch sử giao dịch
-//        u.Balance += amount;
-//        _db.WalletTransactions.Add(new WalletTransaction
-//        {
-//            UserId = userId,
-//            Amount = amount,
-//            Type = "topup",
-//            Description = "Nạp ví mô phỏng - không phải tiền thật"
-//        });
+    
 
-//        await _db.SaveChangesAsync();
+        var totalSpentTask = baseQuery
+            .Where(o => o.Status == OrderStatus.COMPLETED)
+            .SumAsync(o => (decimal?)o.TotalPrice);
 
-//        // Bắn thông báo biến động số dư real-time qua SignalR tới client
-//        await _hub.Clients.Group($"user_{userId}").SendAsync("RealtimeEvent", new { eventName = "balance_changed" });
+        await Task.WhenAll(totalOrdersTask, completedOrdersTask, activeOrdersTask, totalSpentTask);
 
-//        return (true, null, u);
-//    }
 
-//    /// <summary>
-//    /// Rút tiền demo khỏi ví (Kiểm tra số dư và môi trường Development).
-//    /// </summary>
-//    public async Task<(bool Success, string? Error, User? User)> WithdrawAsync(int userId, decimal amount)
-//    {
-//        if (!_env.IsDevelopment())
-//            return (false, "Rút tiền demo chỉ có ở môi trường Development.", null);
 
-//        if (amount <= 0 || amount > 10000000 || amount != decimal.Truncate(amount))
-//            return (false, "Số tiền rút không hợp lệ.", null);
 
-//        var u = await _db.Users.FindAsync(userId);
-//        if (u == null) return (false, "Không tìm thấy người dùng.", null);
-//        if (u.Balance < amount) return (false, "Số dư không đủ.", null);
+        return new CustomerDashboardStatsResponse
+        {
+            ActiveOrders = activeOrdersTask.Result,
+            CompletedOrders = completedOrdersTask.Result,
+            TotalOrders = totalOrdersTask.Result,
+            TotalSpent = totalSpentTask.Result ?? 0m,   
+        };
+    }
 
-//        // Trừ tiền ví và ghi nhận lịch sử giao dịch
-//        u.Balance -= amount;
-//        _db.WalletTransactions.Add(new WalletTransaction
-//        {
-//            UserId = userId,
-//            Amount = -amount,
-//            Type = "withdrawal",
-//            Description = "Rút ví mô phỏng"
-//        });
 
-//        await _db.SaveChangesAsync();
-
-//        // Bắn thông báo biến động số dư real-time qua SignalR tới client
-//        await _hub.Clients.Group($"user_{userId}").SendAsync("RealtimeEvent", new { eventName = "balance_changed" });
-
-//        return (true, null, u);
-//    }
-
-//    /// <summary>
-//    /// Lấy danh sách tin nhắn hỗ trợ (Support messages) của người dùng.
-//    /// </summary>
-//    public async Task<List<SupportMessage>> GetSupportMessagesAsync(int userId)
-//    {
-//        return await _db.SupportMessages
-//            .Where(m => m.UserId == userId)
-//            .OrderBy(m => m.CreatedAtUtc)
-//            .ToListAsync();
-//    }
-
-//    /// <summary>
-//    /// Gửi tin nhắn yêu cầu hỗ trợ mới và tự động tạo phản hồi giả lập từ Bot hệ thống.
-//    /// </summary>
-//    public async Task SendSupportMessageAsync(int userId, string content)
-//    {
-//        // Lưu tin nhắn từ người dùng
-//        _db.SupportMessages.Add(new SupportMessage { UserId = userId, SenderType = "user", Content = content.Trim() });
-
-//        // Lưu tin nhắn tự động phản hồi từ hệ thống/bot
-//        _db.SupportMessages.Add(new SupportMessage { UserId = userId, SenderType = "bot", Content = "Hệ thống đã ghi nhận tin nhắn. Quản trị viên sẽ phản hồi khi có thể." });
-
-//        await _db.SaveChangesAsync();
-
-//        // Thông báo real-time cho user và nhóm quản trị viên (Admin)
-//        await _hub.Clients.Group($"user_{userId}").SendAsync("RealtimeEvent", new { eventName = "new_support_msg" });
-//        await _hub.Clients.Group("role_admin").SendAsync("RealtimeEvent", new { eventName = "new_support_msg", user_id = userId });
-//    }
-//}
+}

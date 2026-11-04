@@ -2,17 +2,18 @@
 using Logistics.Api.Data;
 using Logistics.Api.Domain.Entities;
 using Logistics.Api.Features.Auth;
+using Logistics.Api.Features.Drivers;
 using Logistics.Api.Features.Orders;
 using Logistics.Api.Features.Users;
 using Logistics.Api.Hubs;
-using Logistics.Api.Middlewares; // Namespace chứa LoggingMiddleware & GlobalExceptionMiddleware
+using Logistics.Api.Middlewares; 
 using Logistics.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using static Logistics.Api.Utils.LogisticsUtils; // Đã cập nhật theo namespace mới của LogisticsUtils
+using static Logistics.Api.Utils.LogisticsUtils;
 
 namespace Logistics.Api;
 
@@ -40,13 +41,28 @@ public static class ApplicationSetup
         // 3. Business Services
         builder.Services.AddScoped<AuthService>();
         builder.Services.AddScoped<OrderService>();
-        //builder.Services.AddScoped<UserService>();
+        builder.Services.AddScoped<UserService>();
+        builder.Services.AddScoped<DriverService>();
+        builder.Services.AddScoped<AddressService>();
+        builder.Services.AddScoped<DriverServiceAreaService>();
+        builder.Services.AddScoped<DriverMatchingService>();
+        builder.Services.AddScoped<DriverVehicleService>();
+        builder.Services.AddScoped<DriverOrderService>();
+        builder.Services.AddScoped<DriverStatisticsAndEarningsService>();
+        builder.Services.AddScoped<DriverHistoryService>();
 
-        builder.Services.AddSignalR();
+        // SignalR
+        builder.Services.AddSignalR(options =>
+        {
+            options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+            options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
+            options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+        });
 
         // 4. JWT Authentication & Authorization
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer(o => {
+            .AddJwtBearer(o =>
+            {
                 o.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
@@ -60,8 +76,10 @@ public static class ApplicationSetup
                 };
                 o.Events = new JwtBearerEvents
                 {
-                    OnMessageReceived = ctx => {
-                        if (ctx.Request.Path.StartsWithSegments("/hubs/logistics"))
+                    // SignalR gửi token qua query string "access_token" (không dùng Authorization header)
+                    OnMessageReceived = ctx =>
+                    {
+                        if (ctx.Request.Path.StartsWithSegments(HubPaths.Logistics))
                         {
                             var token = ctx.Request.Query["access_token"];
                             if (!string.IsNullOrWhiteSpace(token)) ctx.Token = token;
@@ -80,6 +98,12 @@ public static class ApplicationSetup
              .AllowAnyMethod()
              .AllowCredentials()));
 
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.Converters.Add(
+                new System.Text.Json.Serialization.JsonStringEnumConverter());
+        });
+
         // 6. Swagger API Explorer
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
@@ -93,25 +117,43 @@ public static class ApplicationSetup
     /// </summary>
     public static WebApplication ConfigureMiddleware(this WebApplication app)
     {
-        // === TÍCH HỢP CUSTOM MIDDLEWARES Ở ĐẦU PIPELINE ===
+        // ============================================================
+        // THỨ TỰ PIPELINE QUAN TRỌNG:
+        //   UseCors → Logging → GlobalException → Auth → Custom → Authz
+        //
+        // - UseCors NGOÀI CÙNG: đảm bảo MỌI response (kể cả lỗi) đều có CORS header
+        // - Logging: đo toàn bộ thời gian request
+        // - GlobalException: bắt mọi exception từ pipeline bên trong
+        // ============================================================
 
-        // 1. LoggingMiddleware nằm ngoài cùng để đo toàn bộ thời gian request đi qua hệ thống và trace lỗi
+        // 1. CORS — phải NGOÀI CÙNG để thêm header vào cả response lỗi
+        app.UseCors(CorsPolicyName);
+
+        // 2. LoggingMiddleware — đo toàn bộ thời gian request
         app.UseMiddleware<LoggingMiddleware>();
 
-        // 2. GlobalExceptionMiddleware bắt toàn bộ ngoại lệ phát sinh từ pipeline bên trong và trả về ApiResponse chuẩn
+        // 3. GlobalExceptionMiddleware — bắt toàn bộ ngoại lệ, trả ApiResponse chuẩn
         app.UseMiddleware<GlobalExceptionMiddleware>();
 
-        // ===================================================
-
-        app.UseCors(CorsPolicyName);
+        // 4. Authentication — parse JWT
         app.UseAuthentication();
 
-        // Middleware kiểm tra tài khoản bị vô hiệu hóa
-        app.Use(async (context, next) => {
+        // 5. Middleware kiểm tra tài khoản bị vô hiệu hóa
+        //    ⚠️ SKIP /hubs — tránh query DB mỗi lần SignalR negotiate/connect
+        app.Use(async (context, next) =>
+        {
+            // Bỏ qua SignalR hub: JWT đã validate, user bị ban sẽ không login được
+            if (context.Request.Path.StartsWithSegments("/hubs"))
+            {
+                await next();
+                return;
+            }
+
             if (context.User.Identity?.IsAuthenticated == true)
             {
                 using var scope = context.RequestServices.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
                 if (!await db.Users.AnyAsync(u => u.Id == UserId(context.User) && u.IsActive))
                 {
                     context.Response.StatusCode = 403;
@@ -119,9 +161,11 @@ public static class ApplicationSetup
                     return;
                 }
             }
+
             await next();
         });
 
+        // 6. Authorization — check role/policy
         app.UseAuthorization();
 
         if (app.Environment.IsDevelopment())
@@ -131,13 +175,27 @@ public static class ApplicationSetup
         }
 
         // Health Check API Endpoint
-        app.MapGet("/health", () => Results.Ok(new { status = "ok", technology = "ASP.NET Core 8 + SignalR + Clean Architecture", utc = DateTime.UtcNow }));
+        app.MapGet("/health", () => Results.Ok(new
+        {
+            status = "ok",
+            technology = "ASP.NET Core 8 + SignalR + Clean Architecture",
+            utc = DateTime.UtcNow
+        }));
 
         // Mapping các Feature Endpoints & SignalR Hub
         app.MapAuthEndpoints();
         app.MapOrderEndpoints();
-        //app.MapUserEndpoints();
-        app.MapHub<LogisticsHub>("/hubs/logistics");
+        app.MapUserEndpoints();
+        app.MapAddressEndpoints();
+        app.MapDriverEndpoints();
+        app.MapDriverServiceAreaEndpoints();
+        app.MapDriverOrderEndpoints();
+        app.MapDriverVehicleEndpoints();
+        app.MapDriverStatisticsAndEarningsEndpoints();
+        app.MapDriverHistoryEndpoints();
+
+
+        app.MapHub<LogisticsHub>(HubPaths.Logistics);
 
         return app;
     }

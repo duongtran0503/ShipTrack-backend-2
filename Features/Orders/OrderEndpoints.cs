@@ -40,7 +40,7 @@ public static class OrderEndpoints
         });
 
         // 2. API cho Customer: Lấy danh sách đơn hàng của chính khách hàng đang đăng nhập
-        api.MapGet("/my-orders", async (int? page, int? itemPerpage, string? search, ClaimsPrincipal p, OrderService orderService) =>
+        api.MapGet("/my-orders", async (int? page, int? itemPerpage, string? search,string? status, ClaimsPrincipal p, OrderService orderService) =>
         {
             if (Role(p).ToString().ToUpper() != UserRole.Customer)
             {
@@ -51,12 +51,12 @@ public static class OrderEndpoints
             int limit = itemPerpage ?? 10;
             int customerId = UserId(p);
 
-            var result = await orderService.GetCustomerOrdersAsync(customerId, pg, limit, search);
+            var result = await orderService.GetCustomerOrdersAsync(customerId, pg, limit, search,status);
             return Results.Ok(ApiResponse<object>.Success(result, "Lấy danh sách đơn hàng cá nhân thành công"));
         });
 
         // 3. API cho Admin: Lấy tất cả đơn hàng có trong cơ sở dữ liệu
-        api.MapGet("/manager", async (int? page, int? itemPerpage, string? search, ClaimsPrincipal p, OrderService orderService) =>
+        api.MapGet("/manager", async (int? page, int? itemPerpage, string? search,string?status ,ClaimsPrincipal p, OrderService orderService) =>
         {
             // Kiểm tra quyền Admin (hoặc bạn có thể tùy chỉnh lại logic check role Admin của hệ thống)
             var userRole = Role(p).ToString().ToUpper();
@@ -68,8 +68,27 @@ public static class OrderEndpoints
             int pg = page ?? 1;
             int limit = itemPerpage ?? 10;
 
-            var result = await orderService.GetAllOrdersForAdminAsync(pg, limit, search);
+            var result = await orderService.GetAllOrdersForAdminAsync(pg, limit, search,status);
             return Results.Ok(ApiResponse<object>.Success(result, "Lấy tất cả đơn hàng hệ thống thành công"));
         });
+
+
+        // 4. Lấy chi tiết đơn hàng theo ID
+        api.MapGet("/{id:int}", async (int id, ClaimsPrincipal p, OrderService orderService) =>
+        {
+            int userId = UserId(p);
+            string userRole = Role(p).ToString();
+
+            // Gọi service lấy dữ liệu (Service sẽ tự throw AppException nếu không thấy hoặc trái phép)
+            var order = await orderService.GetOrderByIdAsync(id, userId, userRole);
+
+            // Áp dụng extension method .ToResponse() có sẵn để trả về định dạng OrderResponse chuẩn
+            var responseData = order.ToResponse();
+
+            return Results.Ok(ApiResponse<object>.Success(responseData, "Lấy thông tin chi tiết đơn hàng thành công"));
+        });
+
+
+
     }
 }

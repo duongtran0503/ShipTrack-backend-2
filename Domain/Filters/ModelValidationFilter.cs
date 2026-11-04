@@ -1,5 +1,6 @@
-﻿using System.ComponentModel.DataAnnotations;
-using Logistics.Api.Domain.Exceptions;
+﻿using Logistics.Api.Domain.Exceptions;
+using System.ComponentModel.DataAnnotations;
+using System.Security.Claims;
 
 namespace Logistics.Api.Common.Filters;
 
@@ -12,16 +13,19 @@ public class ModelValidationFilter : IEndpointFilter
         foreach (var arg in context.Arguments)
         {
             Console.WriteLine($"[FILTER] arg type: {arg?.GetType().FullName ?? "null"}");
-            if (arg == null)
-            {
-                // Ném AppException thay vì trả về Result để GlobalExceptionMiddleware xử lý đồng bộ
-                throw new AppException(new AuthError(400, "Dữ liệu đầu vào không được để trống hoặc null."));
-            }
+            if (arg is null) continue;
 
             var type = arg.GetType();
 
-            // Bỏ qua các kiểu nguyên thủy, chuỗi, hoặc các đối tượng hệ thống (HttpContext, ClaimsPrincipal, Services...)
-            if (type.IsPrimitive || type == typeof(string) || type.Namespace?.StartsWith("Microsoft") == true)
+            // Bỏ qua type hệ thống / service / primitive
+            if (type.IsPrimitive
+                || type.IsEnum
+                || type.IsValueType
+                || type == typeof(string)
+                || type == typeof(ClaimsPrincipal)
+                || type.Namespace?.StartsWith("System") == true
+                || type.Namespace?.StartsWith("Microsoft") == true
+                || type.Namespace?.Contains(".Services") == true)
                 continue;
 
             var validationResults = new List<ValidationResult>();
