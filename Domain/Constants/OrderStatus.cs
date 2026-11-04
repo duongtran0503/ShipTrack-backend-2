@@ -4,9 +4,11 @@ public enum OrderStatus
 {
     PENDING,          // Đang chờ xử lý
     SEARCHING_DRIVER, // Đang tìm tài xế
-    ACCEPTED,         // Tài xế đã nhận đơn
-    ARRIVED_PICKUP,   // Tài xế đã đến điểm lấy hàng
+
+    DRIVER_ASSIGNED,
+    PICKED_UP,
     DELIVERING,       // Đang giao hàng
     COMPLETED,        // Đã hoàn thành
-    CANCELLED         // Đã hủy
+    CANCELLED,         // Đã hủy
+        FAILED,
 }

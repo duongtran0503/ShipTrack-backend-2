@@ -16,6 +16,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<WalletTransaction> WalletTransactions => Set<WalletTransaction>();
     public DbSet<SupportMessage> SupportMessages => Set<SupportMessage>();
     public DbSet<Review> Reviews => Set<Review>();
+    public DbSet<DriverVehicle> DriverVehicles => Set<DriverVehicle>();
+    public DbSet<DriverServiceArea> DriverServiceAreas => Set<DriverServiceArea>();
+    public DbSet<Address> Addresses => Set<Address>();
 
     protected override void OnModelCreating(ModelBuilder m)
     {
@@ -53,6 +56,52 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         // Mỗi đơn hàng chỉ được phép có tối đa 1 đánh giá (Unique)
         m.Entity<Review>().HasIndex(x => x.OrderId).IsUnique();
+
+        // Index query theo Owner (chủ danh bạ)
+        m.Entity<Address>().HasIndex(x => x.OwnerId);
+
+        // Partial unique index: mỗi Owner tối đa 1 địa chỉ mặc định
+        // (SQLite hỗ trợ partial index từ 3.8.0+)
+        m.Entity<Address>()
+            .HasIndex(x => x.OwnerId)
+            .HasDatabaseName("IX_Addresses_OwnerId_IsDefault")
+            .HasFilter("\"IsDefault\" = 1");
+
+        // FK: Owner — xóa Owner thì xóa hết địa chỉ trong danh bạ
+        m.Entity<Address>()
+            .HasOne(x => x.Owner)
+            .WithMany()
+            .HasForeignKey(x => x.OwnerId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+
+
+        // ============ DRIVER VEHICLE ============
+        m.Entity<DriverVehicle>().HasIndex(x => x.DriverId);
+
+        // Partial unique index: mỗi driver tối đa 1 xe mặc định
+        m.Entity<DriverVehicle>()
+            .HasIndex(x => x.DriverId)
+            .HasDatabaseName("IX_DriverVehicles_DriverId_IsDefault")
+            .HasFilter("\"IsDefault\" = 1");
+
+        m.Entity<DriverVehicle>()
+            .HasOne(x => x.Driver).WithMany()
+            .HasForeignKey(x => x.DriverId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // ============ DRIVER SERVICE AREA ============
+        m.Entity<DriverServiceArea>().HasIndex(x => x.DriverId);
+
+        m.Entity<DriverServiceArea>()
+            .HasIndex(x => x.DriverId)
+            .HasDatabaseName("IX_DriverServiceAreas_DriverId_IsDefault")
+            .HasFilter("\"IsDefault\" = 1");
+
+        m.Entity<DriverServiceArea>()
+            .HasOne(x => x.Driver).WithMany()
+            .HasForeignKey(x => x.DriverId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // --- CẤU HÌNH KIỂU DỮ LIỆU TIỀN TỆ (Value Converters: decimal <-> long) ---
         // Giúp lưu các giá trị tiền tệ (decimal) dưới dạng số nguyên (long) trong SQLite để tính toán chính xác, tránh sai số thập phân

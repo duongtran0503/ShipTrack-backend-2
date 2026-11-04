@@ -82,11 +82,16 @@ public class DeliveryOrder
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow; // Thời điểm tạo đơn
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow; // Thời điểm cập nhật
-    public DateTime? CompletedAtUtc { get; set; } // Thời điểm hoàn thành
 
     [MaxLength(250)]
     public string? ProofPhotoPath { get; set; } // Ảnh xác thực giao hàng (POD)
     public bool PaidOut { get; set; } // Đã quyết toán tiền cho tài xế chưa
 
     public List<OrderStatusHistory> History { get; set; } = []; // Lịch sử trạng thái
+    // 🔥 Bổ sung thêm các mốc thời gian còn thiếu
+    public DateTime? AcceptedAtUtc { get; set; }   // Thời điểm tài xế nhận đơn
+    public DateTime? PickedUpAtUtc { get; set; }  // Thời điểm tài xế lấy hàng (PICKED_UP)
+    public DateTime? FailedAtUtc { get; set; }    // Thời điểm đơn hàng bị hủy/thất bại
+    public DateTime? CompletedAtUtc { get; set; } // Thời điểm hoàn thành
+    public String FailureReason { get; set; } = "";
 }
