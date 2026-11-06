@@ -66,7 +66,7 @@ namespace Logistics.Api.Services
             if (serviceAreas.Count == 0)
                 throw new AppException(new AuthError(400, "Chưa cấu hình vùng phục vụ."));
 
-            // 6. Active count — có FAILED
+            // 6. Active count — không tính COMPLETED, CANCELLED, FAILED
             var activeCount = await _db.Orders.AsNoTracking()
                 .CountAsync(o => o.DriverId == driverId
                               && o.Status != OrderStatus.COMPLETED
@@ -76,47 +76,44 @@ namespace Logistics.Api.Services
             if (activeCount >= MaxActiveOrdersPerDriver)
                 return new List<AvailableOrderResponse>();
 
-            // 7. Bounding box
+            // 7. Bounding box chuẩn hóa theo bán kính tối đa (ví dụ 50km)
             var maxRadius = serviceAreas.Max(a => a.RadiusKm);
             var latDelta = maxRadius / 111.0;
-            var lngDelta = maxRadius / (111.0 * Math.Cos(driverLat * Math.PI / 180.0));
+            var cosLat = Math.Cos(driverLat * Math.PI / 180.0);
+            var lngDelta = cosLat != 0 ? maxRadius / (111.0 * Math.Abs(cosLat)) : maxRadius / 111.0;
 
             var minLat = driverLat - latDelta;
             var maxLat = driverLat + latDelta;
             var minLng = driverLng - lngDelta;
             var maxLng = driverLng + lngDelta;
 
-            // 8. Query SQL (Loại bỏ các đơn thiếu tọa độ GPS bằng cách check HasValue)
+            // 8. Query SQL sơ bộ trong vùng Bounding Box
             var candidates = await _db.Orders.AsNoTracking()
                 .Where(o => o.Status == OrderStatus.SEARCHING_DRIVER
-                         && o.DriverId == null
-                         && o.PickupLat != null && o.PickupLng != null
-                         && o.DropoffLat != null && o.DropoffLng != null
-                         && driverVehicles.Contains(o.VehicleType)   
-                         && o.PickupLat >= minLat && o.PickupLat <= maxLat
-                         && o.PickupLng >= minLng && o.PickupLng <= maxLng)
+                       && o.DriverId == null
+                       && o.PickupLat != null && o.PickupLng != null
+                       && o.DropoffLat != null && o.DropoffLng != null
+                       && driverVehicles.Contains(o.VehicleType)
+                       && o.PickupLat >= minLat && o.PickupLat <= maxLat
+                       && o.PickupLng >= minLng && o.PickupLng <= maxLng)
                 .OrderByDescending(o => o.CreatedAtUtc)
                 .Take(100)
                 .ToListAsync();
 
-            // 9. Filter Haversine (Sử dụng .Value vì chắc chắn không null nhờ bước 8)
+            // 9. Lọc chính xác bằng Haversine (Chỉ cần điểm lấy hàng Pickup nằm trong bán kính/vùng phục vụ của tài xế)
             var available = candidates
                 .Where(o =>
                 {
                     double pLat = o.PickupLat!.Value;
                     double pLng = o.PickupLng!.Value;
-                    double dLat = o.DropoffLat!.Value;
-                    double dLng = o.DropoffLng!.Value;
 
+                    // Khoảng cách từ tài xế tới điểm lấy hàng phải <= maxRadius
                     var pickupDistance = GeoUtils.Haversine(driverLat, driverLng, pLat, pLng);
                     if (pickupDistance > maxRadius) return false;
 
-                    var tripDistance = GeoUtils.Haversine(pLat, pLng, dLat, dLng);
-                    if (tripDistance > maxRadius) return false;
-
+                    // Kiểm tra điểm lấy hàng nằm trong phạm vi service area
                     return serviceAreas.Any(area =>
-                        GeoUtils.Haversine(area.CenterLat, area.CenterLng, pLat, pLng) <= area.RadiusKm
-                        && GeoUtils.Haversine(area.CenterLat, area.CenterLng, dLat, dLng) <= area.RadiusKm);
+                        GeoUtils.Haversine(area.CenterLat, area.CenterLng, pLat, pLng) <= area.RadiusKm);
                 })
                 .OrderBy(o => GeoUtils.Haversine(driverLat, driverLng, o.PickupLat!.Value, o.PickupLng!.Value))
                 .Take(50)
@@ -136,14 +133,13 @@ namespace Logistics.Api.Services
                         GeoUtils.Haversine(o.PickupLat!.Value, o.PickupLng!.Value, o.DropoffLat!.Value, o.DropoffLng!.Value), 1),
                     ShippingFee = o.ShippingFee,
                     ServiceType = o.ServiceType,
-                    VehicleType = o.VehicleType.ToString(), // Chuyển Enum sang string cho DTO
+                    VehicleType = o.VehicleType.ToString(),
                     CreatedAtUtc = o.CreatedAtUtc,
                 })
                 .ToList();
 
             return available;
         }
-
 
         /// <summary>
         /// Xem chi tiết đơn hàng đang chờ tài xế nhận.

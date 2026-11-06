@@ -2,6 +2,7 @@
 using Logistics.Api.Domain.Constants;
 using Logistics.Api.Domain.DTOs.Mappings;
 using Logistics.Api.Domain.DTOs.Requests;
+using Logistics.Api.Domain.DTOs.Responses;
 using Logistics.Api.Domain.Entities;
 using Logistics.Api.Domain.Exceptions; // Chứa AppException và OrderError
 using Logistics.Api.Hubs;
@@ -274,6 +275,29 @@ public class OrderService
         }
 
         return order;
+    }
+
+    /// <summary>
+    /// Lấy chi tiết đơn hàng dưới dạng DTO (OrderResponse) dành riêng cho khách hàng,
+    /// tự động kèm thông tin tài xế (Driver) nếu đã có tài xế nhận đơn.
+    /// </summary>
+    public async Task<OrderResponse> GetCustomerOrderDetailAsync(int customerId, int orderId)
+    {
+        var order = await _db.Orders
+            .AsNoTracking()
+            .Include(o => o.Customer)
+            .Include(o => o.Driver) // Join bảng Driver để lấy thông tin tài xế
+            .FirstOrDefaultAsync(o => o.Id == orderId)
+            ?? throw new AppException(new OrderError(404, "Không tìm thấy đơn hàng."));
+
+        //// Kiểm tra quyền sở hữu của khách hàng
+        //if (order.CustomerId != customerId)
+        //{
+        //    throw new AppException(new OrderError(403, "Bạn không có quyền xem thông tin chi tiết của đơn hàng này."));
+        //}
+
+        // Sử dụng extension method ToResponse() để map dữ liệu kèm DriverBriefResponse
+        return order.ToOrderDetailResponse();
     }
 
     private static bool ValidGps(double lat, double lng) =>

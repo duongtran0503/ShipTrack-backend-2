@@ -54,4 +54,6 @@
         DateTime? CompletedAtUtc,    // Thời điểm hoàn thành đơn (UTC)
         string? ProofPhotoPath       // Đường dẫn ảnh xác thực giao hàng thành công (POD)
     );
+
+
 }

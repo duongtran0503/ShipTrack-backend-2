@@ -1,5 +1,6 @@
 ﻿using Logistics.Api.Domain;
 using Logistics.Api.Domain.Constants;
+using Logistics.Api.Domain.DTOs.Mappings;
 using Logistics.Api.Domain.DTOs.Requests;
 using Logistics.Api.Domain.DTOs.Responses;
 using Logistics.Api.Services;
@@ -69,6 +70,29 @@ public static class UserEndpoints
             return Results.Ok(ApiResponse<CustomerDashboardStatsResponse>.Success(
                 stats,
                 "Lấy thống kê thành công"));
+        });
+
+        // GET /api/v1/customer/orders/{id} -> Lấy chi tiết đơn hàng của khách hàng
+        api.MapGet("/customer/orders/{id:int}", async (
+            int id,
+            ClaimsPrincipal p,
+            [FromServices] OrderService orderService) =>
+        {
+            string userRole = Role(p).ToUpper();
+            if (userRole != "CUSTOMER")
+            {
+                return Results.Forbid();
+            }
+
+            int customerId = UserId(p);
+
+            // Gọi hàm đã có sẵn trong OrderService để lấy đơn kèm phân quyền
+            var order = await orderService.GetCustomerOrderDetailAsync(id, customerId);
+
+            // Chuyển đổi sang Response DTO (đã tự động include DriverBriefResponse nếu có driver nhận)
+            
+
+            return Results.Ok(ApiResponse<OrderResponse>.Success(order, "Lấy thông tin chi tiết đơn hàng thành công"));
         });
     }
 

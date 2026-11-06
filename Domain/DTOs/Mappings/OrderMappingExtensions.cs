@@ -75,5 +75,64 @@ namespace Logistics.Api.Domain.DTOs.Mappings
             CompletedAtUtc: o.CompletedAtUtc,
             ProofPhotoPath: o.ProofPhotoPath
         );
+
+        // Trong file Mapping (ví dụ: OrderMapping.cs hoặc phương thức Extension ToResponse)
+        public static OrderResponse ToOrderDetailResponse(this DeliveryOrder order)
+        {
+            DriverBriefResponse? driverBrief = null;
+            if (order.DriverId.HasValue && order.Driver != null)
+            {
+                driverBrief = new DriverBriefResponse(
+                    Name: order.Driver.Name,
+                    Phone: order.Driver.Phone,
+                    LicensePlate: order.Driver.LicensePlate
+                );
+            }
+
+            return new OrderResponse(
+                Id: order.Id,
+                TrackingCode: order.TrackingCode,
+                CustomerId: order.CustomerId,
+                DriverId: order.DriverId,
+                Customer: order.Customer?.Name,
+                Driver: driverBrief,
+                PickupAddress: order.PickupAddress,
+                DropoffAddress: order.DropoffAddress,
+                PickupLat: order.PickupLat,
+                PickupLng: order.PickupLng,
+                DropoffLat: order.DropoffLat,
+                DropoffLng: order.DropoffLng,
+                Status: order.Status.ToString(),
+                VehicleType: order.VehicleType.ToString(),
+                ServiceType: order.ServiceType,
+                ServiceName: order.ServiceType == "express" ? "Giao nhanh" : "Tiêu chuẩn", // Tuỳ chỉnh theo hệ thống
+                SenderName: order.SenderName,
+                SenderPhone: order.SenderPhone,
+                ReceiverName: order.ReceiverName,
+                ReceiverPhone: order.ReceiverPhone,
+                PackageName: order.PackageName,
+                WeightKg: order.WeightKg,
+                PackageDetails: order.PackageDetails,
+                Note: order.Note,
+                DistanceKm: order.DistanceKm,
+                BasePrice: order.BasePrice,
+                ShippingFee: order.ShippingFee,
+                ExtraFee: 0,
+                TotalPrice: order.TotalPrice,
+                DriverEarning: order.ShippingFee * 0.98m, // Ví dụ thu nhập tài xế sau khi trừ 2% phí sàn
+                PaymentMethod: order.PaymentMethod.ToString(),
+                IsBulky: order.IsBulky,
+                IsDoorDelivery: order.IsDoorDelivery,
+                PromotionCode: order.PromotionCode,
+                CodAmount: order.CodAmount,
+                CreatedAtUtc: order.CreatedAtUtc,
+                UpdatedAtUtc: order.UpdatedAtUtc,
+                CompletedAtUtc: order.CompletedAtUtc,
+                ProofPhotoPath: order.ProofPhotoPath
+            );
+        }
     }
+
+
+
 }
